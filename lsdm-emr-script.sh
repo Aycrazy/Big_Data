@@ -1,0 +1,237 @@
+#!/bin/bash
+set -x -e
+
+# AWS EMR bootstrap script 
+##############################
+
+# --port - set the port for Jupyter notebook, default is 8192
+# --password - set the password for Jupyter notebook
+# --ssl - enable ssl, make sure to use your own cert and key files to get rid of the warning
+
+
+# check for master node
+IS_MASTER=false
+if grep isMaster /mnt/var/lib/info/instance.json | grep true;
+then
+  IS_MASTER=true
+fi
+
+# error message
+error_msg ()
+{
+  echo 1>&2 "Error: $1"
+}
+
+# some defaults
+PYTHON_PACKAGES=""
+
+JUPYTER_PORT=8194
+JUPYTER_PASSWORD=""
+
+INTERPRETERS="SQL,PySpark"
+USER_SPARK_OPTS=""
+
+NOTEBOOK_DIR=s3://andrew-s3-emrcluster/notebooks
+
+# get input parameters
+while [ $# -gt 0 ]; do
+    case "$1" in
+    --python-packages)
+      shift
+      PYTHON_PACKAGES=$1
+      ;;
+    --port)
+      shift
+      JUPYTER_PORT=$1
+      ;;
+    --password)
+      shift
+      JUPYTER_PASSWORD=$1
+      ;;
+    --toree-interpreters)
+      shift
+      INTERPRETERS=$1
+      ;;
+    -*)
+      # do not exit out, just note failure
+      error_msg "unrecognized option: $1"
+      ;;
+    *)
+      break;
+      ;;
+    esac
+    shift
+done
+
+
+sudo puppet module install spantree-upstart
+
+
+# move /usr/lib to /mnt/usr-moved/lib to avoid running out of space on /
+if [ ! -d /mnt/usr-moved ]; then
+  sudo mkdir /mnt/usr-moved
+  sudo mv /usr/local /mnt/usr-moved/
+  sudo ln -s /mnt/usr-moved/local /usr/
+  sudo mv /usr/share /mnt/usr-moved/
+  sudo ln -s /mnt/usr-moved/share /usr/
+fi
+
+export MAKE='make -j 8'
+
+sudo yum install -y xorg-x11-xauth.x86_64 xorg-x11-server-utils.x86_64 xterm libXt libX11-devel libXt-devel libcurl-devel git graphviz cyrus-sasl cyrus-sasl-devel readline readline-devel
+sudo yum install --enablerepo=epel -y nodejs npm zeromq3 zeromq3-devel
+sudo yum install -y gcc-c++ patch zlib zlib-devel
+sudo  yum install -y libyaml-devel libffi-devel openssl-devel make
+sudo yum install -y bzip2 autoconf automake libtool bison iconv-devel sqlite devel
+
+
+export NODE_PATH='/usr/lib/node_modules'
+
+
+## Python installations and packages, including jupyter:
+cd /mnt
+sudo python -m pip install --upgrade pip
+sudo ln -sf /usr/local/bin/pip2.7 /usr/bin/pip
+
+sudo python -m pip install -U jupyter
+
+sudo ln -sf /usr/local/bin/ipython /usr/bin/
+sudo ln -sf /usr/local/bin/jupyter /usr/bin/
+
+sudo python -m pip install -U matplotlib seaborn bokeh cython networkx findspark
+sudo python -m pip install -U scikit-learn pandas numpy numexpr statsmodels scipy
+
+## User specified python packages go here:
+if [ ! "$PYTHON_PACKAGES" = "" ]; then
+  sudo python -m pip install -U $PYTHON_PACKAGES || true
+fi
+
+
+if [ "$IS_MASTER" = true ]; then
+
+NOTEBOOK_DIR="${NOTEBOOK_DIR%/}/"
+BUCKET=$(python -c "print('$NOTEBOOK_DIR'.split('//')[1].split('/')[0])")
+FOLDER=$(python -c "print('/'.join('$NOTEBOOK_DIR'.split('//')[1].split('/')[1:-1]))")
+
+## Configure Jupyter Options:
+mkdir -p ~/.jupyter
+touch ls ~/.jupyter/jupyter_notebook_config.py
+
+sed -i '/c.NotebookApp.open_browser/d' ~/.jupyter/jupyter_notebook_config.py
+echo "c.NotebookApp.open_browser = False" >> ~/.jupyter/jupyter_notebook_config.py
+
+sed -i '/c.NotebookApp.port/d' ~/.jupyter/jupyter_notebook_config.py
+echo "c.NotebookApp.port = $JUPYTER_PORT" >> ~/.jupyter/jupyter_notebook_config.py
+
+sed -i '/c.NotebookApp.ip/d' ~/.jupyter/jupyter_notebook_config.py
+echo "c.NotebookApp.ip = '*'" >> ~/.jupyter/jupyter_notebook_config.py
+
+sed -i '/c.NotebookApp.MultiKernelManager.default_kernel_name/d' ~/.jupyter/jupyter_notebook_config.py
+echo "c.NotebookApp.MultiKernelManager.default_kernel_name = 'pyspark'" >> ~/.jupyter/jupyter_notebook_config.py
+
+if [ ! "$JUPYTER_PASSWORD" = "" ]; then
+  sed -i '/c.NotebookApp.password/d' ~/.jupyter/jupyter_notebook_config.py
+  HASHED_PASSWORD=$(python -c "from notebook.auth import passwd; print(passwd('$JUPYTER_PASSWORD'))")
+  echo "c.NotebookApp.password = u'$HASHED_PASSWORD'" >> ~/.jupyter/jupyter_notebook_config.py
+else
+  sed -i '/c.NotebookApp.token/d' ~/.jupyter/jupyter_notebook_config.py
+  echo "c.NotebookApp.token = u''" >> ~/.jupyter/jupyter_notebook_config.py
+fi
+
+echo "c.Authenticator.admin_users = {'hadoop'}" >> ~/.jupyter/jupyter_notebook_config.py
+echo "c.LocalAuthenticator.create_system_users = True" >> ~/.jupyter/jupyter_notebook_config.py
+
+
+sudo python -m pip install -U notebook ipykernel
+sudo python -m ipykernel install
+
+sudo python -m pip install -U jupyter_contrib_nbextensions
+sudo jupyter contrib nbextension install --system
+sudo python -m pip install -U jupyter_nbextensions_configurator
+sudo jupyter nbextensions_configurator enable --system
+
+
+cd /mnt
+curl https://bintray.com/sbt/rpm/rpm | sudo tee /etc/yum.repos.d/bintray-sbt-rpm.repo
+sudo yum install docker sbt -y
+
+git clone https://github.com/apache/incubator-toree.git
+cd incubator-toree/
+
+make -j8 dist
+make release || true 
+
+background_install_proc() {
+while [ ! -f /etc/spark/conf/spark-defaults.conf ]
+do
+  sleep 10
+done
+echo "Found /etc/spark/conf/spark-defaults.conf"
+if ! grep "spark.jars.packages" /etc/spark/conf/spark-defaults.conf; then
+  sudo bash -c "echo 'spark.jars.packages              $SPARK_PACKAGES' >> /etc/spark/conf/spark-defaults.conf"
+fi
+
+sudo python -m pip install /mnt/incubator-toree/dist/toree-pip
+export SPARK_HOME="/usr/lib/spark/"
+
+SPARK_PACKAGES="com.databricks:spark-csv_2.11:1.5.0"
+
+
+if [ "$USER_SPARK_OPTS" = "" ]; then
+  SPARK_OPTS="--packages $SPARK_PACKAGES"
+else
+  SPARK_OPTS=$USER_SPARK_OPTS
+  SPARK_PACKAGES=$(ruby -e "opts='$SPARK_OPTS'.split;pkgs=nil;opts.each_with_index{|o,i| pkgs=opts[i+1] if o.start_with?('--packages')};puts pkgs || '$SPARK_PACKAGES'")
+fi
+
+export SPARK_OPTS
+export SPARK_PACKAGES
+
+sudo jupyter toree install --interpreters=$INTERPRETERS --spark_home=$SPARK_HOME --spark_opts="$SPARK_OPTS"
+
+
+
+echo "Starting Jupyter notebook via pyspark"
+cd ~
+#PYSPARK_DRIVER_PYTHON=jupyter PYSPARK_DRIVER_PYTHON_OPTS="notebook --no-browser" pyspark > /var/log/jupyter.log &
+sudo puppet apply << PUPPET_SCRIPT
+include 'upstart'
+upstart::job { 'jupyter':
+  description    => 'Jupyter',
+  respawn        => true,
+  respawn_limit  => '0 10',
+  start_on       => 'runlevel [2345]',
+  stop_on        => 'runlevel [016]',
+  console        => 'output',
+  chdir          => '/home/hadoop',
+  script           => '
+  sudo su - hadoop > /var/log/jupyter.log 2>&1 <<BASH_SCRIPT
+  export NODE_PATH="$NODE_PATH"
+  export PYSPARK_DRIVER_PYTHON="jupyter"
+  export PYSPARK_DRIVER_PYTHON_OPTS="notebook --no-browser $SSL_OPTS_JUPYTER --log-level=INFO"
+  pyspark
+BASH_SCRIPT
+  ',
+}
+PUPPET_SCRIPT
+}
+
+echo "bucket '$BUCKET' folder '$FOLDER'"
+
+cd ~
+git clone https://github.com/s3fs-fuse/s3fs-fuse.git
+cd s3fs-fuse/
+ls -alrt
+./autogen.sh
+./configure
+make
+sudo make install 
+sudo su -c 'echo user_allow_other >> /etc/fuse.conf'
+mkdir -p ~/s3fs-cache
+mkdir -p ~/$BUCKET
+/usr/local/bin/s3fs -o allow_other -o iam_role=auto -o umask=0 -o url=https://s3.amazonaws.com  -o no_check_certificate -o enable_noobj_cache -o use_cache=~/s3fs-cache $BUCKET ~/$BUCKET
+
+echo "Running background process to install Apacke Toree"
+background_install_proc &
+fi
+echo "Bootstrap action foreground process finished"

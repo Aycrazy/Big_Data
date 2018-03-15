@@ -1,0 +1,6 @@
+#.gitignore file
+
+*accessKeys
+*.csv
+*notes
+*andrew-emrcluster

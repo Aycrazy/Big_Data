@@ -1,0 +1,19 @@
+
+Need access to .pem file
+
+Need vpc subnet id
+
+Need to update inbound security group settings
+    -Doing this for launch and then including the security group ids in the aws command make management of the master much more simple (see script.sh)
+
+
+
+aws emr terminate-clusters --cluster-ids j-3KVXXXXXXX7UG j-WJ2XXXXXX8EU
+
+aws emr ssh --cluster-id j-1SPXOQEZ75I9A --key-pair-file andrew-emrcluster
+
+aws emr modify-cluster-attributes --cluster-id j-1KNP156LAM7VJ --termination-protected
+
+aws emr modify-cluster-attributes --cluster-id j-1KNP156LAM7VJ --no-termination-protected
+
+ssh -i ./mykeypair.pem -N -D 8157 hadoop@ec2-###-##-##-###.compute-1.amazonaws.com
