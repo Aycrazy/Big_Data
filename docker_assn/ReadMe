@@ -1,0 +1,20 @@
+Docker ML ReadMe
+
+Contents include:
+    - Jupyter-notebook file created using "basic use" instructions of the jupyter/pyspark-notebook docker image that builds the multinomial logistic regression notebook
+    - docker-compose yml file
+    - docker container directories: api and web
+        - Two small flask apps (one a web app, and one an api that listens to port 5000)
+        - Api loads a trained multinomial logistic regression model and uses it to predict probabilities for flower species
+
+1) Unzip the docker_assn zip   
+
+2) Inside the main "docker_assn" directory run docker-compose up
+
+3) Go to your http://localhost:8000 (or 0.0.0.0:8000)
+
+4) Input the dimensions of your flower -- This will take you to the result page, where you will view the probability that your flower is one of three species based on the use of a pyspark (MLLib) multinomial logistic regression.
+
+5) If you want to check the probabilities of a different flower go back to http://localhost:8000
+
+Collaborators: Juan Arroyo Miranda, and Ibrahim Gabr

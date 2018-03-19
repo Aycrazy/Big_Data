@@ -1,0 +1,17 @@
+<html>
+<link rel=stylesheet type=text/css href="../static/styles.css">
+   <body>
+      <div class=page>
+        <h3>Docker Iris Web App</h3>
+          <h4> Input your flower's dimensions! To receive probabilities that your flower is of a particular species</h4>
+        <form action = "http://localhost:5000/result" method = "POST">
+           <p>Sepal Length <input type = "text" name = "Sepal Length" placeholder="Enter a float" /></p>
+           <p>Sepal Width <input type = "text" name = "Sepal Width" placeholder="Enter a float" /></p>
+           <p>Petal Length<input type = "text" name = "Petal Length" placeholder="Enter a float" /></p>
+           <p>Petal Width <input type ="text" name = "Petal Width" placeholder="Enter a float" /></p>
+           <p><input type = "submit" value = "submit" placeholder="Enter a float" /></p>
+        </form>
+        
+     </body>
+   </div>
+</html>

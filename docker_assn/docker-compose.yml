@@ -1,0 +1,13 @@
+version: "3"
+services:
+  api:
+    build: ./api
+    expose:
+      - "5000"
+    ports:
+      - "5000:5000"
+  web:
+    # replace username/repo:tag with your name and image details
+    build: ./web
+    ports:
+      - "8000:8000"
